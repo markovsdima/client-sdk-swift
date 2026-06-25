@@ -79,11 +79,19 @@ public class E2EEManager: NSObject, @unchecked Sendable, ObservableObject, Logga
     public init(e2eeOptions: E2EEOptions) {
         self.e2eeOptions = e2eeOptions
         options = nil
+        super.init()
+        configureKeyProviderCallbacks()
     }
 
     public init(options: EncryptionOptions) {
         e2eeOptions = nil
         self.options = options
+        super.init()
+        configureKeyProviderCallbacks()
+    }
+
+    deinit {
+        keyProvider.setParticipantKeyIndexUpdateHandler(nil)
     }
 
     public func setup(room: Room) {
@@ -144,6 +152,9 @@ public class E2EEManager: NSObject, @unchecked Sendable, ObservableObject, Logga
         }
 
         frameCryptor.delegate = delegateAdapter
+        let latestKeyIndex = keyProvider.getLatestKeyIndex(participantId: participantIdentity.stringValue)
+        frameCryptor.keyIndex = latestKeyIndex
+        log("addRtpSender participantId=\(participantIdentity.stringValue) trackId=\(publication.sid) keyIndex=\(latestKeyIndex)")
 
         return _state.mutate {
             $0.frameCryptors[[participantIdentity: publication.sid]] = frameCryptor
@@ -174,6 +185,9 @@ public class E2EEManager: NSObject, @unchecked Sendable, ObservableObject, Logga
         }
 
         frameCryptor.delegate = delegateAdapter
+        let latestKeyIndex = keyProvider.getLatestKeyIndex(participantId: participantIdentity.stringValue)
+        frameCryptor.keyIndex = latestKeyIndex
+        log("addRtpReceiver participantId=\(participantIdentity.stringValue) trackId=\(publication.sid) keyIndex=\(latestKeyIndex)")
 
         return _state.mutate {
             $0.frameCryptors[[participantIdentity: publication.sid]] = frameCryptor
@@ -197,6 +211,34 @@ public class E2EEManager: NSObject, @unchecked Sendable, ObservableObject, Logga
             $0.trackPublications.removeAll()
             $0.dataCryptor = nil
         }
+    }
+
+    private func configureKeyProviderCallbacks() {
+        keyProvider.setParticipantKeyIndexUpdateHandler { [weak self] participantId, keyIndex in
+            self?.updateFrameCryptorKeyIndex(participantId: participantId, keyIndex: keyIndex)
+        }
+    }
+
+    private func updateFrameCryptorKeyIndex(participantId: String?, keyIndex: Int32) {
+        var updatedTrackIds = [Track.Sid]()
+        _state.mutate {
+            for (frameCryptorId, frameCryptor) in $0.frameCryptors {
+                let shouldUpdate = participantId.map { participantId in
+                    frameCryptorId.keys.contains { $0.stringValue == participantId }
+                } ?? true
+
+                if shouldUpdate {
+                    frameCryptor.keyIndex = keyIndex
+                    if let trackId = frameCryptorId.values.first {
+                        updatedTrackIds.append(trackId)
+                    }
+                }
+            }
+        }
+        log(
+            "updateFrameCryptorKeyIndex participantId=\(participantId ?? "shared") " +
+                "keyIndex=\(keyIndex) updated=\(updatedTrackIds.count) tracks=\(updatedTrackIds)"
+        )
     }
 }
 

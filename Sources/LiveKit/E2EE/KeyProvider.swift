@@ -113,6 +113,8 @@ public final class BaseKeyProvider: NSObject, Loggable, Sendable {
 
     struct State {
         var currentKeyIndex: Int32 = 0
+        var latestSetIndexByParticipant = [String: Int32]()
+        var participantKeyIndexUpdateHandler: (@Sendable (_ participantId: String?, _ keyIndex: Int32) -> Void)?
     }
 
     private let _state = StateSync(State())
@@ -156,19 +158,27 @@ public final class BaseKeyProvider: NSObject, Loggable, Sendable {
     /// Sets raw key material for E2EE without applying string encoding.
     public func setKey(data keyData: Data, participantId: String? = nil, index: Int32? = nil) {
         let targetIndex = index ?? getCurrentKeyIndex()
+        let normalizedTargetIndex = normalizedKeyIndex(targetIndex)
 
         if options.sharedKey {
-            rtcKeyProvider.setSharedKey(keyData, with: targetIndex)
+            rtcKeyProvider.setSharedKey(keyData, with: normalizedTargetIndex)
         } else {
             if participantId == nil {
                 log("setKey: Please provide valid participantId for non-SharedKey mode.")
                 return
             }
 
-            rtcKeyProvider.setKey(keyData, with: targetIndex, forParticipant: participantId!)
+            rtcKeyProvider.setKey(keyData, with: normalizedTargetIndex, forParticipant: participantId!)
         }
 
-        setCurrentKeyIndex(targetIndex)
+        let updateHandler = _state.mutate {
+            $0.currentKeyIndex = normalizedTargetIndex
+            if let participantId {
+                $0.latestSetIndexByParticipant[participantId] = normalizedTargetIndex
+            }
+            return $0.participantKeyIndexUpdateHandler
+        }
+        updateHandler?(options.sharedKey ? nil : participantId, normalizedTargetIndex)
     }
 
     public func ratchetKey(participantId: String? = nil, index: Int32? = nil) -> Data? {
@@ -210,7 +220,24 @@ public final class BaseKeyProvider: NSObject, Loggable, Sendable {
     }
 
     public func setCurrentKeyIndex(_ index: Int32) {
-        _state.mutate { $0.currentKeyIndex = index % options.keyRingSize }
+        let normalizedIndex = normalizedKeyIndex(index)
+        let updateHandler = _state.mutate {
+            $0.currentKeyIndex = normalizedIndex
+            return $0.participantKeyIndexUpdateHandler
+        }
+        updateHandler?(nil, normalizedIndex)
+    }
+
+    func getLatestKeyIndex(participantId: String) -> Int32 {
+        _state.read { $0.latestSetIndexByParticipant[participantId] ?? $0.currentKeyIndex }
+    }
+
+    func setParticipantKeyIndexUpdateHandler(_ handler: (@Sendable (_ participantId: String?, _ keyIndex: Int32) -> Void)?) {
+        _state.mutate { $0.participantKeyIndexUpdateHandler = handler }
+    }
+
+    private func normalizedKeyIndex(_ index: Int32) -> Int32 {
+        index % options.keyRingSize
     }
 
     // MARK: - Equal

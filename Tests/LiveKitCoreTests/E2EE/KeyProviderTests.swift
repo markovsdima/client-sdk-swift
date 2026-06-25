@@ -54,6 +54,7 @@ struct KeyProviderTests {
         let exportedKey = try #require(keyProvider.exportKey(participantId: participantId, index: keyIndex))
         #expect(exportedKey == keyData)
         #expect(keyProvider.getCurrentKeyIndex() == keyIndex)
+        #expect(keyProvider.getLatestKeyIndex(participantId: participantId) == keyIndex)
     }
 
     @Test func stringKeyExportsUTF8Bytes() throws {
